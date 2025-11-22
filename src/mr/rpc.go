@@ -41,9 +41,10 @@ type ReportReply struct {
 type Reply struct {
 	TaskType   string // "Map","Reduce","Wait","Exit"
 	TaskID     int
-	InputFiles []string
+	InputFiles string
 	NMap       int
 	NReduce    int
+	ReduceIdx  int
 }
 
 // Cook up a unique-ish UNIX-domain socket name
