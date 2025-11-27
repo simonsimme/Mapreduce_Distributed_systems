@@ -37,8 +37,12 @@ type ReportTask struct {
 type ReportReply struct {
 	Ack bool
 }
+type ReportMissingMapFile struct {
+	MissingFile string
+}
 
 type Reply struct {
+	FileName   string
 	TaskType   string // "Map","Reduce","Wait","Exit"
 	TaskID     int
 	InputFiles string

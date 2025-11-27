@@ -5,7 +5,8 @@ import (
 	"net"
 	"net/http"
 	"net/rpc"
-	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -14,6 +15,7 @@ type Coordinator struct {
 	files       []string
 	mapTasks    []Task
 	reduceTasks []Task
+	mapTaskBank []Task
 	mu          sync.Mutex
 }
 type Task struct {
@@ -79,6 +81,28 @@ func (c *Coordinator) TaskResponse(args *RequestTask, reply *Reply) error {
 	return nil
 
 }
+func (c *Coordinator) ReportMissingMapFile(args *ReportMissingMapFile, reply *ReportReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	reply.Ack = false
+	log.Printf("Received missing map file report: %s\n", args.MissingFile)
+	// if we get like mr-0-0
+	filename := getInputFilenameFromIntermediate(args.MissingFile, c.mapTaskBank)
+	if filename != "" {
+		reply.Ack = true
+	}
+	Task := Task{
+		File:      filename,
+		TaskID:    len(c.mapTasks) + 1,
+		Type:      "Map",
+		WorkerID:  -1,
+		StartTime: time.Time{},
+	}
+	c.mapTasks = append(c.mapTasks, Task)
+	log.Printf("Re-added map task for file: %s\n", filename)
+	//
+	return nil
+}
 
 func (c *Coordinator) Report(args *ReportTask, reply *ReportReply) error {
 	c.mu.Lock()
@@ -120,10 +144,10 @@ func (c *Coordinator) Report(args *ReportTask, reply *ReportReply) error {
 func (c *Coordinator) server() {
 	rpc.Register(c)
 	rpc.HandleHTTP()
-	//l, e := net.Listen("tcp", ":1234")
-	sockname := coordinatorSock()
-	os.Remove(sockname)
-	l, e := net.Listen("unix", sockname)
+	l, e := net.Listen("tcp", ":1234")
+	//sockname := coordinatorSock()
+	//os.Remove(sockname)
+	//l, e := net.Listen("unix", sockname)
 	if e != nil {
 		log.Fatal("listen error:", e)
 	}
@@ -169,10 +193,28 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
 		files:       files,
 		mapTasks:    mapTasks,
+		mapTaskBank: mapTasks,
 		reduceTasks: reduceTasks,
 		mu:          sync.Mutex{},
 	}
 
 	c.server()
 	return &c
+}
+func getInputFilenameFromIntermediate(intermediate string, mapTaskBank []Task) string {
+	// intermediate is like "mr-0-0"
+	parts := strings.Split(intermediate, "-")
+	if len(parts) < 3 {
+		return ""
+	}
+	mapTaskID, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return ""
+	}
+	for _, t := range mapTaskBank {
+		if t.TaskID == mapTaskID {
+			return t.File
+		}
+	}
+	return ""
 }

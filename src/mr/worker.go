@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
+	"net"
+	"net/http"
 	"net/rpc"
 	"os"
+	"path/filepath"
 	"sort"
 	"time"
 )
@@ -25,14 +28,26 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+type WorkerO struct {
+}
+
 // main/mrworker.go calls this function.
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
-
+	log.Printf("Worker %d starting\n", os.Getpid())
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
+	WorkerO := new(WorkerO)
+	rpc.Register(WorkerO)
+	rpc.HandleHTTP()
+	l, e := net.Listen("tcp", ":1235")
+	if e != nil {
+		log.Fatal("listen error:", e)
+	}
+	go http.Serve(l, nil)
+	log.Printf("Worker %d RPC server started\n", os.Getpid())
 	for {
 		if !callForTask(mapf, reducef) {
 			break
@@ -67,8 +82,28 @@ func CallExample() {
 		fmt.Printf("call failed!\n")
 	}
 }
+func callForMissingMapFiles(missingFile string, counter int) {
+	if counter > 3 {
+		log.Fatalf("Failed to report missing map files after %d attempts", counter) // cordinator died or unrechable
+		return
+	}
+	report := ReportMissingMapFile{}
+	report.MissingFile = missingFile
+
+	reply := ReportReply{}
+	ok := call("Coordinator.ReportMissingMapFiles", &report, &reply)
+	if ok {
+		fmt.Printf("report missing files ack %v\n", reply.Ack)
+		if reply.Ack {
+			return
+		}
+	} else {
+		callForMissingMapFiles(missingFile, counter+1)
+	}
+}
 func callForTask(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) bool {
+	log.Printf("Worker %d requesting task\n", os.Getpid())
 	request := RequestTask{}
 	request.WorkerID = os.Getpid()
 
@@ -101,7 +136,29 @@ func callForTask(mapf func(string, string) []KeyValue,
 
 func handle_reduce(reducef func(string, []string) string, reduceIdx int, nMap int) {
 	intermediate := make(map[string][]string)
+	//Check if it has all files it needs aswell as fetch missing ones
+	mapWorkerAddrs := []string{"18.204.227.241"}
+	for m := 0; m < nMap; m++ {
+		filename := fmt.Sprintf("mr-%d-%d", m, reduceIdx)
+		if _, err := os.Stat(filename); os.IsNotExist(err) {
+			// File does not exist locally, fetch from remote workers
+			for _, addr := range mapWorkerAddrs {
+				log.Printf("Attempting to fetch missing file %s from worker %s\n", filename, addr)
 
+				succ := getFilesFromOtherWorker(filename, addr)
+				if succ {
+					log.Printf("Successfully fetched missing file %s from worker %s\n", filename, addr)
+					break // Stop after first successful fetch
+				} else {
+					log.Printf("Failed to fetch missing file %s from worker %s\n", filename, addr)
+					callForMissingMapFiles(filename, 0)
+					return
+				}
+			}
+		}
+		// Now you can safely open/process the file
+	}
+	log.Printf("Worker %d starting reduce task %d\n", os.Getpid(), reduceIdx)
 	// Read all map output files for this reduce partition
 	for m := 0; m < nMap; m++ {
 		filename := fmt.Sprintf("mr-%d-%d", m, reduceIdx)
@@ -195,9 +252,9 @@ func handle_map(mapf func(string, string) []KeyValue, filename string, taskID in
 // usually returns true.
 // returns false if something goes wrong.
 func call(rpcname string, args interface{}, reply interface{}) bool {
-	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
-	sockname := coordinatorSock()
-	c, err := rpc.DialHTTP("unix", sockname)
+	c, err := rpc.DialHTTP("tcp", "3.238.201.207"+":1234")
+	//sockname := coordinatorSock()
+	//c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
 		log.Fatal("dialing:", err)
 	}
@@ -210,4 +267,64 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 
 	fmt.Println(err)
 	return false
+}
+func callWorker(rpcname string, args interface{}, reply interface{}, addr string) bool {
+	c, err := rpc.DialHTTP("tcp", addr+":1235")
+	//sockname := coordinatorSock()
+	//c, err := rpc.DialHTTP("unix", sockname)
+	if err != nil {
+		log.Fatal("dialing:", err)
+	}
+	defer c.Close()
+	log.Printf("Calling worker at %s for RPC %s\n", addr, rpcname)
+	err = c.Call(rpcname, args, reply)
+	if err == nil {
+		return true
+	}
+
+	fmt.Println(err)
+	return false
+}
+
+// advanced part
+type FetchFilesArgs struct {
+	Pattern string
+}
+type FetchFilesReply struct {
+	Files map[string][]byte
+}
+
+func getFilesFromOtherWorker(pattern string, workerAddr string) bool {
+	args := FetchFilesArgs{Pattern: pattern}
+	reply := FetchFilesReply{}
+	log.Printf("Fetching files matching pattern %s from worker %s\n", pattern, workerAddr)
+	maxRetries := 3
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		ok := callWorker("WorkerO.FetchFiles", &args, &reply, workerAddr)
+		log.Printf("Fetch attempt %d for pattern %s from worker %s\n", attempt, pattern, workerAddr)
+		if ok {
+			for fname, data := range reply.Files {
+				os.WriteFile(fname, data, 0644)
+			}
+			return true
+		}
+		time.Sleep(time.Duration(attempt) * time.Second)
+	}
+	log.Printf("Failed to fetch files from worker %s after %d attempts", workerAddr, maxRetries)
+	return false
+}
+func (w *WorkerO) FetchFiles(args *FetchFilesArgs, reply *FetchFilesReply) error {
+	reply.Files = make(map[string][]byte)
+	files, err := filepath.Glob(args.Pattern)
+	if err != nil {
+		return err
+	}
+	for _, fname := range files {
+		data, err := os.ReadFile(fname)
+		if err != nil {
+			continue
+		}
+		reply.Files[fname] = data
+	}
+	return nil
 }
