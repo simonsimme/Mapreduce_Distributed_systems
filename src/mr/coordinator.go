@@ -54,12 +54,10 @@ func (c *Coordinator) TaskResponse(args *RequestTask, reply *Reply) error {
 				reply.NMap = len(c.files)
 				reply.NReduce = len(c.reduceTasks)
 				f, err := os.ReadFile(c.mapTasks[i].File)
-				log.Printf("Reading file %s", c.mapTasks[i].File)
 				f, err = os.ReadFile(c.mapTasks[i].File)
 				if err != nil {
 					log.Fatalf("cannot read %v", c.mapTasks[i].File)
 				}
-				log.Printf("Read %d bytes from %s", len(f), c.mapTasks[i].File)
 				reply.File = f
 				flag = true
 				c.mapTasks[i].StartTime = time.Now()

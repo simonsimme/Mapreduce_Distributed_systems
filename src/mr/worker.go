@@ -101,7 +101,6 @@ func callForTask(mapf func(string, string) []KeyValue,
 		fmt.Printf("reply %v\n", reply.TaskType) // got task
 		switch reply.TaskType {
 		case "Map":
-			log.Println(len(reply.File))
 			handle_map(mapf, reply.InputFiles, reply.TaskID, reply.NReduce, reply.File)
 			callReport(mapf, reducef, "Map", reply.TaskID, true, 0)
 		case "Reduce":
@@ -213,17 +212,9 @@ func handle_map(mapf func(string, string) []KeyValue, filename string, taskID in
 	if err != nil {
 		log.Fatalf("cannot read %v", filename)
 	} */
-	err := os.WriteFile(filename, file, 0644)
-	if err != nil {
-		log.Fatalf("cannot write %v: %v", filename, err)
-	}
-	//content := Get_client(cordinator_address, cordinator_port, filename)
-	content, err := os.ReadFile(filename)
-	if err != nil {
-		log.Fatalf("cannot read %v", filename)
-	}
+
 	// call mapf
-	kva := mapf(filename, string(content))
+	kva := mapf(filename, string(file))
 
 	// partition kva into nReduce intermediate files
 	buckets := make([][]KeyValue, nReduce)
