@@ -51,6 +51,7 @@ type Reply struct {
 	NReduce      int
 	ReduceIdx    int
 	NeededAdress []string
+	File         []byte
 }
 
 // Cook up a unique-ish UNIX-domain socket name

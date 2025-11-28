@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-var cordinator_address = "localhost"
-var cordinator_port = ":8080"
+var cordinator_address = "3.227.0.14"
+var cordinator_port = ":1234"
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -54,7 +54,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	}
 	go http.Serve(l, nil)
 	log.Printf("Worker %d RPC server started\n", os.Getpid())
-	
+
 	for {
 		if !callForTask(mapf, reducef) {
 			break
@@ -101,7 +101,8 @@ func callForTask(mapf func(string, string) []KeyValue,
 		fmt.Printf("reply %v\n", reply.TaskType) // got task
 		switch reply.TaskType {
 		case "Map":
-			handle_map(mapf, reply.InputFiles, reply.TaskID, reply.NReduce)
+			log.Println(len(reply.File))
+			handle_map(mapf, reply.InputFiles, reply.TaskID, reply.NReduce, reply.File)
 			callReport(mapf, reducef, "Map", reply.TaskID, true, 0)
 		case "Reduce":
 			handle_reduce(reducef, reply.ReduceIdx, reply.NMap, reply.NeededAdress)
@@ -124,9 +125,6 @@ func callForTask(mapf func(string, string) []KeyValue,
 func handle_reduce(reducef func(string, []string) string, reduceIdx int, nMap int, mapWorkerAddrs []string) {
 	intermediate := make(map[string][]string)
 	//Check if it has all files it needs aswell as fetch missing ones
-	
-	mapWorkerAddrs := []string{"18.204.227.241"}
-
 	for m := 0; m < nMap; m++ {
 		filename := fmt.Sprintf("mr-%d-%d", m, reduceIdx)
 		if _, err := os.Stat(filename); os.IsNotExist(err) {
@@ -209,15 +207,21 @@ func callReport(mapf func(string, string) []KeyValue,
 		fmt.Printf("call failed!\n")
 	}
 }
-func handle_map(mapf func(string, string) []KeyValue, filename string, taskID int, nReduce int) {
+func handle_map(mapf func(string, string) []KeyValue, filename string, taskID int, nReduce int, file []byte) {
 	// read input file
 	/*content, err := os.ReadFile(filename)
 	if err != nil {
 		log.Fatalf("cannot read %v", filename)
 	} */
-
-	content :=  Get_client(cordinator_address, cordinator_port, filename)
-
+	err := os.WriteFile(filename, file, 0644)
+	if err != nil {
+		log.Fatalf("cannot write %v: %v", filename, err)
+	}
+	//content := Get_client(cordinator_address, cordinator_port, filename)
+	content, err := os.ReadFile(filename)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+	}
 	// call mapf
 	kva := mapf(filename, string(content))
 
@@ -244,7 +248,7 @@ func handle_map(mapf func(string, string) []KeyValue, filename string, taskID in
 // usually returns true.
 // returns false if something goes wrong.
 func call(rpcname string, args interface{}, reply interface{}) bool {
-	c, err := rpc.DialHTTP("tcp", cordinator_address+cordinator_port)
+	c, err := rpc.DialHTTP("tcp", "3.227.0.14"+":1234")
 	//sockname := coordinatorSock()
 	//c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {

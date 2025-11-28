@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/rpc"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,12 +13,12 @@ import (
 )
 
 type Coordinator struct {
-	files       []string
-	mapTasks    []Task
-	reduceTasks []Task
-	mapTaskBank []Task
-	mu          sync.Mutex
-	mapTaskAddr  map[int]string //map index to addr of worker
+	files        []string
+	mapTasks     []Task
+	reduceTasks  []Task
+	mapTaskBank  []Task
+	mu           sync.Mutex
+	workAdresses map[int]string
 }
 type Task struct {
 	File      string // for map tasks
@@ -52,6 +53,14 @@ func (c *Coordinator) TaskResponse(args *RequestTask, reply *Reply) error {
 				reply.InputFiles = c.mapTasks[i].File
 				reply.NMap = len(c.files)
 				reply.NReduce = len(c.reduceTasks)
+				f, err := os.ReadFile(c.mapTasks[i].File)
+				log.Printf("Reading file %s", c.mapTasks[i].File)
+				f, err = os.ReadFile(c.mapTasks[i].File)
+				if err != nil {
+					log.Fatalf("cannot read %v", c.mapTasks[i].File)
+				}
+				log.Printf("Read %d bytes from %s", len(f), c.mapTasks[i].File)
+				reply.File = f
 				flag = true
 				c.mapTasks[i].StartTime = time.Now()
 				break
@@ -113,13 +122,11 @@ func (c *Coordinator) ReportMissingMapFile(args *ReportMissingMapFile, reply *Re
 	return nil
 }
 
-func (c *Coordinator) Report (args *ReportTask, reply *ReportReply) error {
+func (c *Coordinator) Report(args *ReportTask, reply *ReportReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	reply.Ack = true
 	flag := false
-
-	
 
 	if args.Success {
 		if args.TaskType == "Map" {
@@ -164,10 +171,7 @@ func (c *Coordinator) server() {
 		log.Fatal("listen error:", e)
 	}
 	go http.Serve(l, nil)
-	
-	
-	
-	go StartServer("8080")
+
 }
 
 // main/mrcoordinator.go calls Done() periodically to find out
@@ -215,8 +219,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		workAdresses: make(map[int]string),
 	}
 
-	
-
 	c.server()
 	return &c
 }
@@ -238,6 +240,6 @@ func getInputFilenameFromIntermediate(intermediate string, mapTaskBank []Task) s
 	return ""
 }
 
-func getIPsforMaps(){
+func getIPsforMaps() {
 
 }
