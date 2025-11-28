@@ -14,6 +14,9 @@ import (
 	"time"
 )
 
+var cordinator_address = "localhost"
+var cordinator_port = ":8080"
+
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
 	Key   string
@@ -42,12 +45,15 @@ func Worker(mapf func(string, string) []KeyValue,
 	WorkerO := new(WorkerO)
 	rpc.Register(WorkerO)
 	rpc.HandleHTTP()
+
 	l, e := net.Listen("tcp", ":1235")
+
 	if e != nil {
 		log.Fatal("listen error:", e)
 	}
 	go http.Serve(l, nil)
 	log.Printf("Worker %d RPC server started\n", os.Getpid())
+	
 	for {
 		if !callForTask(mapf, reducef) {
 			break
@@ -56,32 +62,6 @@ func Worker(mapf func(string, string) []KeyValue,
 
 }
 
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
-	}
-}
 func callForMissingMapFiles(missingFile string, counter int) {
 	if counter > 3 {
 		log.Fatalf("Failed to report missing map files after %d attempts", counter) // cordinator died or unrechable
@@ -137,7 +117,9 @@ func callForTask(mapf func(string, string) []KeyValue,
 func handle_reduce(reducef func(string, []string) string, reduceIdx int, nMap int) {
 	intermediate := make(map[string][]string)
 	//Check if it has all files it needs aswell as fetch missing ones
+	
 	mapWorkerAddrs := []string{"18.204.227.241"}
+
 	for m := 0; m < nMap; m++ {
 		filename := fmt.Sprintf("mr-%d-%d", m, reduceIdx)
 		if _, err := os.Stat(filename); os.IsNotExist(err) {
@@ -222,10 +204,13 @@ func callReport(mapf func(string, string) []KeyValue,
 }
 func handle_map(mapf func(string, string) []KeyValue, filename string, taskID int, nReduce int) {
 	// read input file
-	content, err := os.ReadFile(filename)
+	/*content, err := os.ReadFile(filename)
 	if err != nil {
 		log.Fatalf("cannot read %v", filename)
-	}
+	} */
+
+	content :=  Get_client(cordinator_address, cordinator_port, filename)
+
 	// call mapf
 	kva := mapf(filename, string(content))
 
@@ -252,7 +237,7 @@ func handle_map(mapf func(string, string) []KeyValue, filename string, taskID in
 // usually returns true.
 // returns false if something goes wrong.
 func call(rpcname string, args interface{}, reply interface{}) bool {
-	c, err := rpc.DialHTTP("tcp", "3.238.201.207"+":1234")
+	c, err := rpc.DialHTTP("tcp", cordinator_address+cordinator_port)
 	//sockname := coordinatorSock()
 	//c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {

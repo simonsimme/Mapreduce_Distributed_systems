@@ -17,6 +17,7 @@ type Coordinator struct {
 	reduceTasks []Task
 	mapTaskBank []Task
 	mu          sync.Mutex
+	mapTaskAddr  map[int]string //map index to addr of worker
 }
 type Task struct {
 	File      string // for map tasks
@@ -27,15 +28,6 @@ type Task struct {
 	StartTime time.Time
 }
 
-// Your code here -- RPC handlers for the worker to call.
-
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
 func (c *Coordinator) TaskResponse(args *RequestTask, reply *Reply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -104,17 +96,20 @@ func (c *Coordinator) ReportMissingMapFile(args *ReportMissingMapFile, reply *Re
 	return nil
 }
 
-func (c *Coordinator) Report(args *ReportTask, reply *ReportReply) error {
+func (c *Coordinator) Report (args *ReportTask, reply *ReportReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	reply.Ack = true
 	flag := false
+
+	
 
 	if args.Success {
 		if args.TaskType == "Map" {
 			for i := range c.mapTasks {
 				if c.mapTasks[i].TaskID == args.TaskID {
 					c.mapTasks = append(c.mapTasks[:i], c.mapTasks[i+1:]...)
+
 					flag = true
 					return nil
 				}
@@ -152,6 +147,10 @@ func (c *Coordinator) server() {
 		log.Fatal("listen error:", e)
 	}
 	go http.Serve(l, nil)
+	
+	
+	
+	go StartServer("8080")
 }
 
 // main/mrcoordinator.go calls Done() periodically to find out
@@ -198,6 +197,8 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		mu:          sync.Mutex{},
 	}
 
+	
+
 	c.server()
 	return &c
 }
@@ -217,4 +218,8 @@ func getInputFilenameFromIntermediate(intermediate string, mapTaskBank []Task) s
 		}
 	}
 	return ""
+}
+
+func getIPsforMaps(){
+
 }
