@@ -12,11 +12,12 @@ import (
 )
 
 type Coordinator struct {
-	files       []string
-	mapTasks    []Task
-	reduceTasks []Task
-	mapTaskBank []Task
-	mu          sync.Mutex
+	files        []string
+	mapTasks     []Task
+	reduceTasks  []Task
+	mapTaskBank  []Task
+	workAdresses map[int]string
+	mu           sync.Mutex
 }
 type Task struct {
 	File      string // for map tasks
@@ -27,18 +28,19 @@ type Task struct {
 	StartTime time.Time
 }
 
-// Your code here -- RPC handlers for the worker to call.
-
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
 func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	reply.Y = args.X + 1
 	return nil
 }
 func (c *Coordinator) TaskResponse(args *RequestTask, reply *Reply) error {
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	log.Printf(args.Adress)
+	if _, exists := c.workAdresses[args.WorkerID]; !exists {
+		c.workAdresses[args.WorkerID] = args.Adress
+		log.Printf("Registered worker %d with address %s\n", args.WorkerID, args.Adress)
+	}
 	println("Worker", args.WorkerID, "requested task")
 	flag := false
 	if len(c.mapTasks) > 0 {
@@ -65,6 +67,13 @@ func (c *Coordinator) TaskResponse(args *RequestTask, reply *Reply) error {
 				reply.NMap = len(c.files)
 				reply.NReduce = len(c.reduceTasks)
 				reply.ReduceIdx = c.reduceTasks[i].ReduceIdx
+				list := []string{}
+				for _, addr := range c.workAdresses {
+					if addr != c.workAdresses[args.WorkerID] {
+						list = append(list, addr)
+					}
+				}
+				reply.NeededAdress = list
 				flag = true
 				c.reduceTasks[i].StartTime = time.Now()
 				break
@@ -191,11 +200,12 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	}
 	println("Coordinator created with", len(mapTasks), "map tasks and", len(reduceTasks), "reduce tasks.")
 	c := Coordinator{
-		files:       files,
-		mapTasks:    mapTasks,
-		mapTaskBank: mapTasks,
-		reduceTasks: reduceTasks,
-		mu:          sync.Mutex{},
+		files:        files,
+		mapTasks:     mapTasks,
+		mapTaskBank:  mapTasks,
+		reduceTasks:  reduceTasks,
+		mu:           sync.Mutex{},
+		workAdresses: make(map[int]string),
 	}
 
 	c.server()

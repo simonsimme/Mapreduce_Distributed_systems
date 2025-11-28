@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -106,6 +107,12 @@ func callForTask(mapf func(string, string) []KeyValue,
 	log.Printf("Worker %d requesting task\n", os.Getpid())
 	request := RequestTask{}
 	request.WorkerID = os.Getpid()
+	ip, err := GetPublicIPv4()
+	if err != nil {
+		log.Fatalf("Failed to get public IP address: %v", err)
+	}
+	log.Printf("Worker %d public IP address: %s\n", os.Getpid(), ip)
+	request.Adress = ip
 
 	reply := Reply{}
 
@@ -117,7 +124,7 @@ func callForTask(mapf func(string, string) []KeyValue,
 			handle_map(mapf, reply.InputFiles, reply.TaskID, reply.NReduce)
 			callReport(mapf, reducef, "Map", reply.TaskID, true, 0)
 		case "Reduce":
-			handle_reduce(reducef, reply.ReduceIdx, reply.NMap)
+			handle_reduce(reducef, reply.ReduceIdx, reply.NMap, reply.NeededAdress)
 			callReport(mapf, reducef, "Reduce", reply.TaskID, true, 0)
 		case "Wait":
 			time.Sleep(time.Second)
@@ -134,10 +141,9 @@ func callForTask(mapf func(string, string) []KeyValue,
 	return false
 }
 
-func handle_reduce(reducef func(string, []string) string, reduceIdx int, nMap int) {
+func handle_reduce(reducef func(string, []string) string, reduceIdx int, nMap int, mapWorkerAddrs []string) {
 	intermediate := make(map[string][]string)
 	//Check if it has all files it needs aswell as fetch missing ones
-	mapWorkerAddrs := []string{"18.204.227.241"}
 	for m := 0; m < nMap; m++ {
 		filename := fmt.Sprintf("mr-%d-%d", m, reduceIdx)
 		if _, err := os.Stat(filename); os.IsNotExist(err) {
@@ -252,7 +258,7 @@ func handle_map(mapf func(string, string) []KeyValue, filename string, taskID in
 // usually returns true.
 // returns false if something goes wrong.
 func call(rpcname string, args interface{}, reply interface{}) bool {
-	c, err := rpc.DialHTTP("tcp", "3.238.201.207"+":1234")
+	c, err := rpc.DialHTTP("tcp", "3.227.0.14"+":1234")
 	//sockname := coordinatorSock()
 	//c, err := rpc.DialHTTP("unix", sockname)
 	if err != nil {
@@ -327,4 +333,16 @@ func (w *WorkerO) FetchFiles(args *FetchFilesArgs, reply *FetchFilesReply) error
 		reply.Files[fname] = data
 	}
 	return nil
+}
+func GetPublicIPv4() (string, error) {
+	resp, err := http.Get("https://api.ipify.org?format=text")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	ip, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return string(ip), nil
 }
