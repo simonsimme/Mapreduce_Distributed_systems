@@ -27,6 +27,7 @@ type ExampleReply struct {
 // Add your RPC definitions here.
 type RequestTask struct {
 	WorkerID int
+	Adress   string
 }
 type ReportTask struct {
 	TaskType string // "Map" or "Reduce"
@@ -42,13 +43,14 @@ type ReportMissingMapFile struct {
 }
 
 type Reply struct {
-	FileName   string
-	TaskType   string // "Map","Reduce","Wait","Exit"
-	TaskID     int
-	InputFiles string
-	NMap       int
-	NReduce    int
-	ReduceIdx  int
+	FileName     string
+	TaskType     string // "Map","Reduce","Wait","Exit"
+	TaskID       int
+	InputFiles   string
+	NMap         int
+	NReduce      int
+	ReduceIdx    int
+	NeededAdress []string
 }
 
 // Cook up a unique-ish UNIX-domain socket name
