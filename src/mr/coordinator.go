@@ -29,23 +29,26 @@ type Task struct {
 	StartTime time.Time
 }
 
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
-}
+// gets task request from worker and reply with task
 func (c *Coordinator) TaskResponse(args *RequestTask, reply *Reply) error {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	log.Printf(args.Adress)
+	// if we dont have this workers IPv4 address yet, store it
 	if _, exists := c.workAdresses[args.WorkerID]; !exists {
 		c.workAdresses[args.WorkerID] = args.Adress
 		log.Printf("Registered worker %d with address %s\n", args.WorkerID, args.Adress)
 	}
+
 	println("Worker", args.WorkerID, "requested task")
+	// flag to se if an task got assigned or not
 	flag := false
+	//if we have map tasks
 	if len(c.mapTasks) > 0 {
 		for i := range c.mapTasks {
+			// check if the task has been assigned or if it has timed out
 			if c.mapTasks[i].WorkerID == -1 || time.Since(c.mapTasks[i].StartTime) > 10*time.Second {
 				c.mapTasks[i].WorkerID = args.WorkerID
 				reply.TaskType = c.mapTasks[i].Type
@@ -53,19 +56,23 @@ func (c *Coordinator) TaskResponse(args *RequestTask, reply *Reply) error {
 				reply.InputFiles = c.mapTasks[i].File
 				reply.NMap = len(c.files)
 				reply.NReduce = len(c.reduceTasks)
+				// reads the needed file for the task
 				f, err := os.ReadFile(c.mapTasks[i].File)
-				f, err = os.ReadFile(c.mapTasks[i].File)
 				if err != nil {
 					log.Fatalf("cannot read %v", c.mapTasks[i].File)
 				}
+				//adds it to the reply
 				reply.File = f
+				//task found flag set to true
 				flag = true
 				c.mapTasks[i].StartTime = time.Now()
 				break
 			}
 		}
 	} else {
+		//for all reduce tasks
 		for i := range c.reduceTasks {
+			// check if the task has been assigned or if it has timed out
 			if c.reduceTasks[i].WorkerID == -1 || time.Since(c.reduceTasks[i].StartTime) > 10*time.Second {
 				c.reduceTasks[i].WorkerID = args.WorkerID
 				reply.TaskType = c.reduceTasks[i].Type
@@ -75,19 +82,22 @@ func (c *Coordinator) TaskResponse(args *RequestTask, reply *Reply) error {
 				reply.NReduce = len(c.reduceTasks)
 				reply.ReduceIdx = c.reduceTasks[i].ReduceIdx
 				list := []string{}
+				// gather all worker addresses except the requesting worker
 				for _, addr := range c.workAdresses {
 					if addr != c.workAdresses[args.WorkerID] {
 						list = append(list, addr)
 					}
 				}
+				//forward the adresses of other workers to the reduce worker
 				reply.NeededAdress = list
+				//task found flag set to true
 				flag = true
 				c.reduceTasks[i].StartTime = time.Now()
 				break
 			}
 		}
 	}
-
+	// if no task found, reply with wait or exit
 	if !flag {
 		reply.TaskType = "Wait"
 		if len(c.mapTasks) == 0 && len(c.reduceTasks) == 0 {
@@ -95,37 +105,46 @@ func (c *Coordinator) TaskResponse(args *RequestTask, reply *Reply) error {
 		}
 	}
 	return nil
-
 }
+
+// awnser to report of missing map file from worker
 func (c *Coordinator) ReportMissingMapFile(args *ReportMissingMapFile, reply *ReportReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	reply.Ack = false
 	log.Printf("Received missing map file report: %s\n", args.MissingFile)
-	// if we get like mr-0-0
+
+	// filename expected to look like mr-0-0
 	filename := getInputFilenameFromIntermediate(args.MissingFile, c.mapTaskBank)
 	if filename != "" {
+		// found the original map file
 		reply.Ack = true
+		// create a new map task for the missing file
+		Task := Task{
+			File:      filename,
+			TaskID:    len(c.mapTasks) + 1,
+			Type:      "Map",
+			WorkerID:  -1,
+			StartTime: time.Time{},
+		}
+		//add to the list of map tasks
+		c.mapTasks = append(c.mapTasks, Task)
+		log.Printf("Re-added map task for file: %s\n", filename)
 	}
-	Task := Task{
-		File:      filename,
-		TaskID:    len(c.mapTasks) + 1,
-		Type:      "Map",
-		WorkerID:  -1,
-		StartTime: time.Time{},
-	}
-	c.mapTasks = append(c.mapTasks, Task)
-	log.Printf("Re-added map task for file: %s\n", filename)
-	//
 	return nil
 }
 
+// awnser to report of completed task from worker
 func (c *Coordinator) Report(args *ReportTask, reply *ReportReply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	reply.Ack = true
+	//flag to se if we found the task
 	flag := false
 
+	//if task was successful remove it from the list
 	if args.Success {
 		if args.TaskType == "Map" {
 			for i := range c.mapTasks {
@@ -147,10 +166,11 @@ func (c *Coordinator) Report(args *ReportTask, reply *ReportReply) error {
 		}
 
 	} else {
+		//if task not sucessful, could add timer and so on, but do nothing for now
 		flag = true
 	}
 	if !flag {
-		// task not found or compleated
+		log.Printf("Received report for unknown task %s %d\n", args.TaskType, args.TaskID)
 	}
 
 	return nil
@@ -162,9 +182,6 @@ func (c *Coordinator) server() {
 	rpc.Register(c)
 	rpc.HandleHTTP()
 	l, e := net.Listen("tcp", ":1234")
-	//sockname := coordinatorSock()
-	//os.Remove(sockname)
-	//l, e := net.Listen("unix", sockname)
 	if e != nil {
 		log.Fatal("listen error:", e)
 	}
@@ -184,6 +201,7 @@ func (c *Coordinator) Done() bool {
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
+	//creates all task from the input files
 	id := 0
 	mapTasks := make([]Task, len(files))
 	for i, fname := range files {
@@ -207,7 +225,9 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		}
 		id++
 	}
+
 	println("Coordinator created with", len(mapTasks), "map tasks and", len(reduceTasks), "reduce tasks.")
+	//create the cordinator with the tasks
 	c := Coordinator{
 		files:        files,
 		mapTasks:     mapTasks,
@@ -220,6 +240,8 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c.server()
 	return &c
 }
+
+// helper function to get original map input file from intermediate file name
 func getInputFilenameFromIntermediate(intermediate string, mapTaskBank []Task) string {
 	// intermediate is like "mr-0-0"
 	parts := strings.Split(intermediate, "-")
@@ -236,8 +258,4 @@ func getInputFilenameFromIntermediate(intermediate string, mapTaskBank []Task) s
 		}
 	}
 	return ""
-}
-
-func getIPsforMaps() {
-
 }

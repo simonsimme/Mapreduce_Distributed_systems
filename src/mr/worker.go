@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-var cordinator_address = "3.227.0.14"
-var cordinator_port = ":1234"
+var cordinatorAddress = "3.239.86.200"
+var cordinatorPort = "1234"
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -32,6 +32,7 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+// empty struct to register RPC methods on
 type WorkerO struct {
 }
 
@@ -39,10 +40,9 @@ type WorkerO struct {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
-	// Your worker implementation here.
 	log.Printf("Worker %d starting\n", os.Getpid())
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
+
+	// Register RPC server to serve fetch requests from other workers
 	WorkerO := new(WorkerO)
 	rpc.Register(WorkerO)
 	rpc.HandleHTTP()
@@ -55,6 +55,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	go http.Serve(l, nil)
 	log.Printf("Worker %d RPC server started\n", os.Getpid())
 
+	// main loop to request tasks
 	for {
 		if !callForTask(mapf, reducef) {
 			break
@@ -72,7 +73,7 @@ func callForMissingMapFiles(missingFile string, counter int) {
 	report.MissingFile = missingFile
 
 	reply := ReportReply{}
-	ok := call("Coordinator.ReportMissingMapFiles", &report, &reply)
+	ok := call("Coordinator.ReportMissingMapFiles", &report, &reply, cordinatorAddress, cordinatorPort)
 	if ok {
 		fmt.Printf("report missing files ack %v\n", reply.Ack)
 		if reply.Ack {
@@ -96,7 +97,7 @@ func callForTask(mapf func(string, string) []KeyValue,
 
 	reply := Reply{}
 
-	ok := call("Coordinator.TaskResponse", &request, &reply)
+	ok := call("Coordinator.TaskResponse", &request, &reply, cordinatorAddress, cordinatorPort)
 	if ok {
 		fmt.Printf("reply %v\n", reply.TaskType) // got task
 		switch reply.TaskType {
@@ -104,8 +105,9 @@ func callForTask(mapf func(string, string) []KeyValue,
 			handle_map(mapf, reply.InputFiles, reply.TaskID, reply.NReduce, reply.File)
 			callReport(mapf, reducef, "Map", reply.TaskID, true, 0)
 		case "Reduce":
-			handle_reduce(reducef, reply.ReduceIdx, reply.NMap, reply.NeededAdress)
-			callReport(mapf, reducef, "Reduce", reply.TaskID, true, 0)
+			if handle_reduce(reducef, reply.ReduceIdx, reply.NMap, reply.NeededAdress) {
+				callReport(mapf, reducef, "Reduce", reply.TaskID, true, 0)
+			}
 		case "Wait":
 			time.Sleep(time.Second)
 			callForTask(mapf, reducef)
@@ -116,13 +118,14 @@ func callForTask(mapf func(string, string) []KeyValue,
 		}
 
 	} else {
-		fmt.Printf("call failed!\n")
+		fmt.Printf("call failed! CORDINATOR NOT AWNSERING\n")
 	}
 	return false
 }
 
-func handle_reduce(reducef func(string, []string) string, reduceIdx int, nMap int, mapWorkerAddrs []string) {
+func handle_reduce(reducef func(string, []string) string, reduceIdx int, nMap int, mapWorkerAddrs []string) bool {
 	intermediate := make(map[string][]string)
+
 	//Check if it has all files it needs aswell as fetch missing ones
 	for m := 0; m < nMap; m++ {
 		filename := fmt.Sprintf("mr-%d-%d", m, reduceIdx)
@@ -130,21 +133,23 @@ func handle_reduce(reducef func(string, []string) string, reduceIdx int, nMap in
 			// File does not exist locally, fetch from remote workers
 			for _, addr := range mapWorkerAddrs {
 				log.Printf("Attempting to fetch missing file %s from worker %s\n", filename, addr)
-
-				succ := getFilesFromOtherWorker(filename, addr)
+				// Try to get the file from this worker, true = success
+				succ := getFilesFromOtherWorker(filename, addr, ":1235")
 				if succ {
 					log.Printf("Successfully fetched missing file %s from worker %s\n", filename, addr)
-					break // Stop after first successful fetch
+					break // Stop after first successful fetch and resumes to REDUCE TASK
 				} else {
 					log.Printf("Failed to fetch missing file %s from worker %s\n", filename, addr)
+					//if faild call cordinator to report missing file
 					callForMissingMapFiles(filename, 0)
-					return
+					return false // retun false to stop the reduce task, the timer will make cordinator give task again
 				}
 			}
 		}
-		// Now you can safely open/process the file
 	}
+
 	log.Printf("Worker %d starting reduce task %d\n", os.Getpid(), reduceIdx)
+
 	// Read all map output files for this reduce partition
 	for m := 0; m < nMap; m++ {
 		filename := fmt.Sprintf("mr-%d-%d", m, reduceIdx)
@@ -164,7 +169,7 @@ func handle_reduce(reducef func(string, []string) string, reduceIdx int, nMap in
 		file.Close()
 	}
 
-	// Sort keys for deterministic output (optional)
+	// Sort keys for deterministic output
 	keys := make([]string, 0, len(intermediate))
 	for k := range intermediate {
 		keys = append(keys, k)
@@ -179,9 +184,13 @@ func handle_reduce(reducef func(string, []string) string, reduceIdx int, nMap in
 		output := reducef(key, intermediate[key])
 		fmt.Fprintf(ofile, "%v %v\n", key, output)
 	}
+	return true
 }
+
+// send a ReportTask RPC to the coordinator to report task completion
 func callReport(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string, taskType string, taskID int, success bool, counter int) {
+	// retry up to 3 times to contact cordinator
 	if counter > 3 {
 		log.Fatalf("Failed to report task %s %d after %d attempts", taskType, taskID, counter)
 		return
@@ -194,7 +203,7 @@ func callReport(mapf func(string, string) []KeyValue,
 
 	reply := ReportReply{}
 
-	ok := call("Coordinator.Report", &report, &reply)
+	ok := call("Coordinator.Report", &report, &reply, cordinatorAddress, cordinatorPort)
 	if ok {
 		fmt.Printf("report ack %v\n", reply.Ack)
 		if reply.Ack != false {
@@ -203,17 +212,13 @@ func callReport(mapf func(string, string) []KeyValue,
 			callReport(mapf, reducef, taskType, taskID, success, counter+1)
 		}
 	} else {
-		fmt.Printf("call failed!\n")
+		fmt.Printf("call failed! FAILED TO CONTACT CORDINATOR\n")
 	}
 }
-func handle_map(mapf func(string, string) []KeyValue, filename string, taskID int, nReduce int, file []byte) {
-	// read input file
-	/*content, err := os.ReadFile(filename)
-	if err != nil {
-		log.Fatalf("cannot read %v", filename)
-	} */
 
-	// call mapf
+func handle_map(mapf func(string, string) []KeyValue, filename string, taskID int, nReduce int, file []byte) {
+
+	// create a temporary file to hold the input data
 	kva := mapf(filename, string(file))
 
 	// partition kva into nReduce intermediate files
@@ -223,6 +228,7 @@ func handle_map(mapf func(string, string) []KeyValue, filename string, taskID in
 		buckets[bucket] = append(buckets[bucket], kv)
 	}
 
+	// write each bucket to a separate intermediate file
 	for i := 0; i < nReduce; i++ {
 		oname := fmt.Sprintf("mr-%d-%d", taskID, i)
 		ofile, _ := os.Create(oname)
@@ -232,38 +238,16 @@ func handle_map(mapf func(string, string) []KeyValue, filename string, taskID in
 		}
 		ofile.Close()
 	}
-
 }
 
-// send an RPC request to the coordinator, wait for the response.
-// usually returns true.
-// returns false if something goes wrong.
-func call(rpcname string, args interface{}, reply interface{}) bool {
-	c, err := rpc.DialHTTP("tcp", "3.227.0.14"+":1234")
-	//sockname := coordinatorSock()
-	//c, err := rpc.DialHTTP("unix", sockname)
+// call an adress with RPC
+func call(rpcname string, args interface{}, reply interface{}, addr string, port string) bool {
+	c, err := rpc.DialHTTP("tcp", addr+port)
 	if err != nil {
 		log.Fatal("dialing:", err)
 	}
 	defer c.Close()
 
-	err = c.Call(rpcname, args, reply)
-	if err == nil {
-		return true
-	}
-
-	fmt.Println(err)
-	return false
-}
-func callWorker(rpcname string, args interface{}, reply interface{}, addr string) bool {
-	c, err := rpc.DialHTTP("tcp", addr+":1235")
-	//sockname := coordinatorSock()
-	//c, err := rpc.DialHTTP("unix", sockname)
-	if err != nil {
-		log.Fatal("dialing:", err)
-	}
-	defer c.Close()
-	log.Printf("Calling worker at %s for RPC %s\n", addr, rpcname)
 	err = c.Call(rpcname, args, reply)
 	if err == nil {
 		return true
@@ -274,38 +258,50 @@ func callWorker(rpcname string, args interface{}, reply interface{}, addr string
 }
 
 // advanced part
+
+// RPC call i need this file name
 type FetchFilesArgs struct {
 	Pattern string
 }
+
+// filename and its content
 type FetchFilesReply struct {
 	Files map[string][]byte
 }
 
-func getFilesFromOtherWorker(pattern string, workerAddr string) bool {
+// fetch files matching pattern from another worker, if return false it failed
+func getFilesFromOtherWorker(pattern string, workerAddr string, port string) bool {
 	args := FetchFilesArgs{Pattern: pattern}
 	reply := FetchFilesReply{}
+
 	log.Printf("Fetching files matching pattern %s from worker %s\n", pattern, workerAddr)
+
 	maxRetries := 3
+	//attempts thre times to fetch files
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		ok := callWorker("WorkerO.FetchFiles", &args, &reply, workerAddr)
+		ok := call("WorkerO.FetchFiles", &args, &reply, workerAddr, port)
 		log.Printf("Fetch attempt %d for pattern %s from worker %s\n", attempt, pattern, workerAddr)
 		if ok {
 			for fname, data := range reply.Files {
 				os.WriteFile(fname, data, 0644)
 			}
 			return true
-		}
+		} // wait longer each attempt
 		time.Sleep(time.Duration(attempt) * time.Second)
 	}
 	log.Printf("Failed to fetch files from worker %s after %d attempts", workerAddr, maxRetries)
 	return false
 }
+
+// RPC method, replies with files matching pattern
 func (w *WorkerO) FetchFiles(args *FetchFilesArgs, reply *FetchFilesReply) error {
 	reply.Files = make(map[string][]byte)
+	//find files matching pattern
 	files, err := filepath.Glob(args.Pattern)
 	if err != nil {
 		return err
 	}
+	//search all matches and write to reply
 	for _, fname := range files {
 		data, err := os.ReadFile(fname)
 		if err != nil {
@@ -315,6 +311,8 @@ func (w *WorkerO) FetchFiles(args *FetchFilesArgs, reply *FetchFilesReply) error
 	}
 	return nil
 }
+
+// standard get IPv4
 func GetPublicIPv4() (string, error) {
 	resp, err := http.Get("https://api.ipify.org?format=text")
 	if err != nil {
