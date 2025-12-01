@@ -127,6 +127,7 @@ func callForTask(mapf func(string, string) []KeyValue,
 
 func handle_reduce(reducef func(string, []string) string, filename1 string, reduceIdx int, nMap int, mapWorkerAddrs []string) bool {
 	intermediate := make(map[string][]string)
+	missingfiles_Flag := false
 
 	//Check if it has all files it needs aswell as fetch missing ones
 	for m := 0; m < nMap; m++ {
@@ -136,7 +137,11 @@ func handle_reduce(reducef func(string, []string) string, filename1 string, redu
 			for _, addr := range mapWorkerAddrs {
 				log.Printf("Attempting to fetch missing file %s from worker %s\n", filename, addr)
 				// Try to get the file from this worker, true = success
-				succ := getFilesFromOtherWorker(filename, addr, ":1235")
+				succ := false
+				if !missingfiles_Flag {
+					succ = getFilesFromOtherWorker(filename, addr, ":1235")
+
+				}
 				if succ {
 					log.Printf("Successfully fetched missing file %s from worker %s\n", filename, addr)
 					break // Stop after first successful fetch and resumes to REDUCE TASK
@@ -144,10 +149,13 @@ func handle_reduce(reducef func(string, []string) string, filename1 string, redu
 					log.Printf("Failed to fetch missing file %s from worker %s\n", filename, addr)
 					//if faild call cordinator to report missing file
 					callForMissingMapFiles(filename, 0)
-					return false // retun false to stop the reduce task, the timer will make cordinator give task again
+					missingfiles_Flag = true // retun false to stop the reduce task, the timer will make cordinator give task again
 				}
 			}
 		}
+	}
+	if missingfiles_Flag {
+		return false
 	}
 
 	log.Printf("Worker %d starting reduce task %d\n", os.Getpid(), reduceIdx)
