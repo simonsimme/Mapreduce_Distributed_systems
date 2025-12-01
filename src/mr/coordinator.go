@@ -37,7 +37,7 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 func (c *Coordinator) TaskResponse(args *RequestTask, reply *Reply) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	println("Worker", args.WorkerID, "requested task")
+	//println("Worker", args.WorkerID, "requested task")
 	flag := false
 	if len(c.mapTasks) > 0 {
 		for i := range c.mapTasks {
@@ -165,7 +165,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		}
 		id++
 	}
-	println("Coordinator created with", len(mapTasks), "map tasks and", len(reduceTasks), "reduce tasks.")
+	//println("Coordinator created with", len(mapTasks), "map tasks and", len(reduceTasks), "reduce tasks.")
 	c := Coordinator{
 		files:       files,
 		mapTasks:    mapTasks,
