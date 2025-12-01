@@ -15,8 +15,8 @@ import (
 	"time"
 )
 
-var cordinatorAddress = "3.239.86.200"
-var cordinatorPort = "1234"
+var cordinatorAddress = "44.220.249.99"
+var cordinatorPort = ":1234"
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -73,7 +73,7 @@ func callForMissingMapFiles(missingFile string, counter int) {
 	report.MissingFile = missingFile
 
 	reply := ReportReply{}
-	ok := call("Coordinator.ReportMissingMapFiles", &report, &reply, cordinatorAddress, cordinatorPort)
+	ok := call("Coordinator.ReportMissingMapFile", &report, &reply, cordinatorAddress, cordinatorPort)
 	if ok {
 		fmt.Printf("report missing files ack %v\n", reply.Ack)
 		if reply.Ack {
@@ -102,11 +102,13 @@ func callForTask(mapf func(string, string) []KeyValue,
 		fmt.Printf("reply %v\n", reply.TaskType) // got task
 		switch reply.TaskType {
 		case "Map":
-			handle_map(mapf, reply.InputFiles, reply.TaskID, reply.NReduce, reply.File)
-			callReport(mapf, reducef, "Map", reply.TaskID, true, 0)
+			filesmade := handle_map(mapf, reply.InputFiles, reply.TaskID, reply.NReduce, reply.File)
+			callReportmap(mapf, reducef, "Map", reply.TaskID, reply.InputFiles, filesmade, true, 0)
 		case "Reduce":
-			if handle_reduce(reducef, reply.ReduceIdx, reply.NMap, reply.NeededAdress) {
+			if handle_reduce(reducef, reply.InputFiles, reply.ReduceIdx, reply.NMap, reply.NeededAdress) {
 				callReport(mapf, reducef, "Reduce", reply.TaskID, true, 0)
+			} else {
+				callForTask(mapf, reducef)
 			}
 		case "Wait":
 			time.Sleep(time.Second)
@@ -123,7 +125,7 @@ func callForTask(mapf func(string, string) []KeyValue,
 	return false
 }
 
-func handle_reduce(reducef func(string, []string) string, reduceIdx int, nMap int, mapWorkerAddrs []string) bool {
+func handle_reduce(reducef func(string, []string) string, filename1 string, reduceIdx int, nMap int, mapWorkerAddrs []string) bool {
 	intermediate := make(map[string][]string)
 
 	//Check if it has all files it needs aswell as fetch missing ones
@@ -215,8 +217,37 @@ func callReport(mapf func(string, string) []KeyValue,
 		fmt.Printf("call failed! FAILED TO CONTACT CORDINATOR\n")
 	}
 }
+func callReportmap(mapf func(string, string) []KeyValue,
+	reducef func(string, []string) string, taskType string, taskID int, filefrom string, files []string, success bool, counter int) {
+	// retry up to 3 times to contact cordinator
+	if counter > 3 {
+		log.Fatalf("Failed to report task %s %d after %d attempts", taskType, taskID, counter)
+		return
+	}
+	report := ReportTask{}
+	report.TaskType = taskType
+	report.TaskID = taskID
+	report.Success = success
+	report.FileName = files
+	report.Filefrom = filefrom
+	//report.WorkerID = os.Getpid()
 
-func handle_map(mapf func(string, string) []KeyValue, filename string, taskID int, nReduce int, file []byte) {
+	reply := ReportReply{}
+
+	ok := call("Coordinator.Report", &report, &reply, cordinatorAddress, cordinatorPort)
+	if ok {
+		fmt.Printf("report ack %v\n", reply.Ack)
+		if reply.Ack != false {
+			callForTask(mapf, reducef)
+		} else {
+			callReport(mapf, reducef, taskType, taskID, success, counter+1)
+		}
+	} else {
+		fmt.Printf("call failed! FAILED TO CONTACT CORDINATOR\n")
+	}
+}
+
+func handle_map(mapf func(string, string) []KeyValue, filename string, taskID int, nReduce int, file []byte) []string {
 
 	// create a temporary file to hold the input data
 	kva := mapf(filename, string(file))
@@ -227,7 +258,7 @@ func handle_map(mapf func(string, string) []KeyValue, filename string, taskID in
 		bucket := ihash(kv.Key) % nReduce
 		buckets[bucket] = append(buckets[bucket], kv)
 	}
-
+	listofFiles := []string{}
 	// write each bucket to a separate intermediate file
 	for i := 0; i < nReduce; i++ {
 		oname := fmt.Sprintf("mr-%d-%d", taskID, i)
@@ -236,15 +267,17 @@ func handle_map(mapf func(string, string) []KeyValue, filename string, taskID in
 		for _, kv := range buckets[i] {
 			enc.Encode(&kv)
 		}
+		listofFiles = append(listofFiles, oname)
 		ofile.Close()
 	}
+	return listofFiles
 }
 
 // call an adress with RPC
 func call(rpcname string, args interface{}, reply interface{}, addr string, port string) bool {
 	c, err := rpc.DialHTTP("tcp", addr+port)
 	if err != nil {
-		log.Fatal("dialing:", err)
+		return false
 	}
 	defer c.Close()
 

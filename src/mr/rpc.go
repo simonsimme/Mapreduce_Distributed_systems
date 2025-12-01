@@ -13,6 +13,8 @@ type RequestTask struct {
 type ReportTask struct {
 	TaskType string // "Map" or "Reduce"
 	TaskID   int
+	FileName []string
+	Filefrom string
 	Success  bool
 }
 type ReportReply struct {

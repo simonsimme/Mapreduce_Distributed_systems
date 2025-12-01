@@ -16,9 +16,10 @@ type Coordinator struct {
 	files        []string
 	mapTasks     []Task
 	reduceTasks  []Task
-	mapTaskBank  []Task
 	mu           sync.Mutex
 	workAdresses map[int]string
+	mapTcount    int
+	filesWnames  map[string]string // mr-<m>-<r> to original filename
 }
 type Task struct {
 	File      string // for map tasks
@@ -114,16 +115,24 @@ func (c *Coordinator) ReportMissingMapFile(args *ReportMissingMapFile, reply *Re
 
 	reply.Ack = false
 	log.Printf("Received missing map file report: %s\n", args.MissingFile)
-
 	// filename expected to look like mr-0-0
-	filename := getInputFilenameFromIntermediate(args.MissingFile, c.mapTaskBank)
+	parts := strings.Split(args.MissingFile, "-")
+
+	mID, err := strconv.Atoi(parts[1])
+	if err != nil {
+		log.Printf("bad map id: %v", err)
+	}
+
+	filename := c.filesWnames[args.MissingFile]
+	log.Printf("Original filename for missing file %s is %s\n", args.MissingFile, filename)
+
 	if filename != "" {
 		// found the original map file
 		reply.Ack = true
 		// create a new map task for the missing file
 		Task := Task{
 			File:      filename,
-			TaskID:    len(c.mapTasks) + 1,
+			TaskID:    mID,
 			Type:      "Map",
 			WorkerID:  -1,
 			StartTime: time.Time{},
@@ -150,7 +159,9 @@ func (c *Coordinator) Report(args *ReportTask, reply *ReportReply) error {
 			for i := range c.mapTasks {
 				if c.mapTasks[i].TaskID == args.TaskID {
 					c.mapTasks = append(c.mapTasks[:i], c.mapTasks[i+1:]...)
-
+					for _, fname := range args.FileName {
+						c.filesWnames[fname] = args.Filefrom
+					}
 					flag = true
 					return nil
 				}
@@ -231,31 +242,13 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
 		files:        files,
 		mapTasks:     mapTasks,
-		mapTaskBank:  mapTasks,
 		reduceTasks:  reduceTasks,
 		mu:           sync.Mutex{},
+		mapTcount:    len(mapTasks),
+		filesWnames:  make(map[string]string),
 		workAdresses: make(map[int]string),
 	}
 
 	c.server()
 	return &c
-}
-
-// helper function to get original map input file from intermediate file name
-func getInputFilenameFromIntermediate(intermediate string, mapTaskBank []Task) string {
-	// intermediate is like "mr-0-0"
-	parts := strings.Split(intermediate, "-")
-	if len(parts) < 3 {
-		return ""
-	}
-	mapTaskID, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return ""
-	}
-	for _, t := range mapTaskBank {
-		if t.TaskID == mapTaskID {
-			return t.File
-		}
-	}
-	return ""
 }
